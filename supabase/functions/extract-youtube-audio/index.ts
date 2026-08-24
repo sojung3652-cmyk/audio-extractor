@@ -2,9 +2,11 @@ import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
 // Public cobalt instances (including api.cobalt.tools) now require an
 // operator-issued API key / JWT to curb anonymous scraping abuse — so this
-// points at a self-hosted cobalt instance's base URL, set via a Supabase
-// function secret (`supabase secrets set COBALT_API_URL=...`).
-const COBALT_API_URL = Deno.env.get("COBALT_API_URL");
+// points at a self-hosted cobalt instance (Railway) instead. Override via the
+// COBALT_API_URL / COBALT_API_KEY Supabase function secrets if the instance
+// ever moves.
+const COBALT_API_URL =
+  Deno.env.get("COBALT_API_URL") ?? "https://cobalt-tools-production-85ec.up.railway.app/";
 const COBALT_API_KEY = Deno.env.get("COBALT_API_KEY");
 
 const CORS_HEADERS = {
@@ -37,13 +39,6 @@ Deno.serve(async (req: Request) => {
   const sourceUrl = rawUrl?.trim();
   if (!sourceUrl || !YOUTUBE_URL_PATTERN.test(sourceUrl)) {
     return jsonError("올바른 유튜브 URL이 아닙니다.", 400);
-  }
-
-  if (!COBALT_API_URL) {
-    return jsonError(
-      "서버에 cobalt 인스턴스가 설정되지 않았습니다 (COBALT_API_URL 시크릿 필요).",
-      500
-    );
   }
 
   let cobaltResponse: Response;
