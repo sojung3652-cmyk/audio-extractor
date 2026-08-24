@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["AudioExtractorModule"]
+  },
+  "android": {
+    "modules": ["com.kimsj3652.audioextractor.audioextractor.AudioExtractorModule"]
+  }
+}
