@@ -17,6 +17,11 @@ const CORS_HEADERS = {
 
 const YOUTUBE_URL_PATTERN = /^https?:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//i;
 
+// Shown to the user for any cobalt/network-level failure. The specific cause
+// (logged via console.error below) is not actionable by the user, so we
+// don't surface raw HTTP codes or cobalt error codes for these cases.
+const CONNECTION_ERROR_MESSAGE = "서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.";
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: CORS_HEADERS });
@@ -57,14 +62,14 @@ Deno.serve(async (req: Request) => {
         audioBitrate: "128",
       }),
     });
-  } catch {
-    return jsonError("cobalt 서비스에 연결하지 못했습니다.", 502);
+  } catch (err) {
+    console.error("cobalt request failed:", err);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
-  if (!cobaltResponse.ok) {
-    return jsonError(`cobalt 서비스 오류 (HTTP ${cobaltResponse.status}).`, 502);
-  }
-
+  // cobalt reports per-video errors (e.g. "this video needs a login") with a
+  // structured JSON body even on a non-2xx HTTP status, so parse the body
+  // before deciding whether this was a real connection failure.
   let cobaltData: {
     status?: string;
     url?: string;
@@ -73,20 +78,30 @@ Deno.serve(async (req: Request) => {
   };
   try {
     cobaltData = await cobaltResponse.json();
-  } catch {
-    return jsonError("cobalt 응답을 해석할 수 없습니다.", 502);
+  } catch (err) {
+    console.error("failed to parse cobalt response:", err, "http status:", cobaltResponse.status);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
   if (cobaltData.status === "error") {
     const code = cobaltData.error?.code ?? "unknown";
-    return jsonError(`오디오 추출에 실패했습니다 (${code}).`, 502);
+    console.error("cobalt reported an error for this video:", code);
+    // Not a server outage — this specific video can't be processed (e.g. it
+    // requires a logged-in session on YouTube's end), so retrying won't help.
+    return jsonError("이 영상에서는 오디오를 추출할 수 없습니다. 다른 영상으로 시도해주세요.", 422);
+  }
+
+  if (!cobaltResponse.ok) {
+    console.error("cobalt returned non-2xx with no structured error:", cobaltResponse.status);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
   if (
     (cobaltData.status !== "tunnel" && cobaltData.status !== "redirect") ||
     !cobaltData.url
   ) {
-    return jsonError(`지원하지 않는 응답 형식입니다 (${cobaltData.status ?? "unknown"}).`, 502);
+    console.error("unexpected cobalt response status:", cobaltData.status);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
   // Stream the audio file back through this function so the client never has
@@ -95,12 +110,14 @@ Deno.serve(async (req: Request) => {
   let fileResponse: Response;
   try {
     fileResponse = await fetch(cobaltData.url);
-  } catch {
-    return jsonError("추출된 오디오 파일을 내려받지 못했습니다.", 502);
+  } catch (err) {
+    console.error("failed to download from cobalt tunnel:", err);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
   if (!fileResponse.ok || !fileResponse.body) {
-    return jsonError(`오디오 파일 다운로드 실패 (HTTP ${fileResponse.status}).`, 502);
+    console.error("cobalt tunnel returned non-2xx:", fileResponse.status);
+    return jsonError(CONNECTION_ERROR_MESSAGE, 502);
   }
 
   const filename = cobaltData.filename || "audio.mp3";

@@ -30,6 +30,16 @@ function toFsPath(uri: string) {
 
 const YOUTUBE_URL_PATTERN = /^https?:\/\/(www\.|m\.)?(youtube\.com|youtu\.be)\//i;
 
+function parseContentDispositionFilename(header: string | null): string | null {
+  const match = header?.match(/filename="?([^";]+)"?/i);
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1];
+  }
+}
+
 const SIZE_OPTIONS: { value: TextSize; label: string }[] = [
   { value: 'normal', label: '보통' },
   { value: 'large', label: '크게' },
@@ -206,7 +216,29 @@ function AudioExtractorScreen() {
 
     try {
       const requestUrl = `${YOUTUBE_EXTRACT_FUNCTION_URL}?url=${encodeURIComponent(trimmedLink)}`;
-      const file = await File.downloadFileAsync(requestUrl, cacheDir, { idempotent: true });
+      const response = await fetch(requestUrl);
+
+      if (!response.ok) {
+        // The function returns a JSON { error: "사람이 읽을 메시지" } body on
+        // failure — downloadFileAsync would only expose the HTTP status code,
+        // so we fetch manually to surface that message instead.
+        let friendlyMessage = '서버 연결에 실패했습니다. 잠시 후 다시 시도해주세요.';
+        try {
+          const errorBody = await response.json();
+          if (typeof errorBody?.error === 'string') friendlyMessage = errorBody.error;
+        } catch {
+          // Non-JSON error body; keep the generic message.
+        }
+        throw new Error(friendlyMessage);
+      }
+
+      const arrayBuffer = await response.arrayBuffer();
+      const filename =
+        parseContentDispositionFilename(response.headers.get('Content-Disposition')) ??
+        `youtube_${Date.now()}.mp3`;
+      const file = new File(cacheDir, filename);
+      file.write(new Uint8Array(arrayBuffer));
+
       const baseName = file.name.replace(/\.[^/.]+$/, '');
       setOutputFile(file);
       setSourceName(file.name);
